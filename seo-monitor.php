@@ -1,12 +1,13 @@
 <?php
 /**
- * Plugin Name: SEO Monitor
- * Description: Регулярно проверяет технические SEO-настройки и отправляет отчёты в Telegram.
- * Version: 1.0.0
+ * Plugin Name: Пивзавод77 — SEO Monitor
+ * Description: Регулярно проверяет технические SEO-настройки pivzavod77.ru и отправляет отчёты в Telegram.
+ * Version: 1.0.1
  * Author: ООО "АЙ ТИ ГАММА"
- * URL Author: https://wsp24.ru
+ * Uthor URL: https://wsp24.ru/
  * Requires at least: 6.2
  * Requires PHP: 8.0
+ * Update URI: https://github.com/WebStyleProduction24/seo-monitor
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -14,7 +15,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 final class P77_SEO_Monitor {
-	private const VERSION             = '1.0.0';
+	private const VERSION             = '1.0.2';
+	private const PLUGIN_SLUG         = 'pivzavod77-seo-monitor';
+	private const GITHUB_REPOSITORY   = 'WebStyleProduction24/seo-monitor';
+	private const GITHUB_URL          = 'https://github.com/WebStyleProduction24/seo-monitor';
+	private const GITHUB_API_URL      = 'https://api.github.com/repos/WebStyleProduction24/seo-monitor/releases/latest';
+	private const UPDATE_CACHE_KEY    = 'p77_seo_monitor_github_release';
 	private const SETTINGS_OPTION     = 'p77_seo_monitor_settings';
 	private const SUBSCRIBERS_OPTION  = 'p77_seo_monitor_subscribers';
 	private const LAST_REPORT_OPTION  = 'p77_seo_monitor_last_report';
@@ -31,6 +37,10 @@ final class P77_SEO_Monitor {
 		add_action( self::HOURLY_HOOK, array( __CLASS__, 'run_hourly_check' ) );
 		add_action( self::WEEKLY_HOOK, array( __CLASS__, 'run_weekly_check' ) );
 		add_action( 'rest_api_init', array( __CLASS__, 'register_rest_routes' ) );
+		add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'check_github_update' ) );
+		add_filter( 'plugins_api', array( __CLASS__, 'github_plugin_information' ), 20, 3 );
+		add_filter( 'upgrader_source_selection', array( __CLASS__, 'normalize_update_source' ), 10, 4 );
+		add_action( 'upgrader_process_complete', array( __CLASS__, 'clear_update_cache' ), 10, 2 );
 
 		if ( is_admin() ) {
 			add_action( 'admin_menu', array( __CLASS__, 'admin_menu' ) );
@@ -113,6 +123,181 @@ final class P77_SEO_Monitor {
 	private static function get_settings(): array {
 		$stored = get_option( self::SETTINGS_OPTION, array() );
 		return wp_parse_args( is_array( $stored ) ? $stored : array(), self::defaults() );
+	}
+
+	/**
+	 * Добавляет обновление из последнего публичного GitHub Release в стандартный
+	 * список обновлений WordPress.
+	 */
+	public static function check_github_update( $transient ) {
+		if ( ! is_object( $transient ) ) {
+			$transient = new stdClass();
+		}
+		if ( empty( $transient->checked ) || ! is_array( $transient->checked ) ) {
+			return $transient;
+		}
+
+		$release = self::latest_github_release();
+		if ( is_wp_error( $release ) ) {
+			return $transient;
+		}
+
+		$new_version = self::release_version( $release );
+		$package     = self::release_package( $release );
+		$plugin_file = plugin_basename( __FILE__ );
+
+		if ( $new_version && $package && version_compare( $new_version, self::VERSION, '>' ) ) {
+			$transient->response[ $plugin_file ] = (object) array(
+				'id'           => self::GITHUB_URL,
+				'slug'         => self::PLUGIN_SLUG,
+				'plugin'       => $plugin_file,
+				'new_version'  => $new_version,
+				'url'          => self::GITHUB_URL . '/releases/latest',
+				'package'      => $package,
+				'tested'       => '7.1',
+				'requires_php' => '8.0',
+				'icons'        => array(),
+				'banners'      => array(),
+			);
+		} else {
+			$transient->no_update[ $plugin_file ] = (object) array(
+				'id'           => self::GITHUB_URL,
+				'slug'         => self::PLUGIN_SLUG,
+				'plugin'       => $plugin_file,
+				'new_version'  => self::VERSION,
+				'url'          => self::GITHUB_URL,
+				'package'      => '',
+				'tested'       => '7.1',
+				'requires_php' => '8.0',
+			);
+		}
+
+		return $transient;
+	}
+
+	/**
+	 * Выводит описание GitHub Release в стандартном окне «Детали версии».
+	 */
+	public static function github_plugin_information( $result, string $action, $args ) {
+		if ( 'plugin_information' !== $action || ! is_object( $args ) || self::PLUGIN_SLUG !== ( $args->slug ?? '' ) ) {
+			return $result;
+		}
+
+		$release = self::latest_github_release();
+		if ( is_wp_error( $release ) ) {
+			return $result;
+		}
+		$version = self::release_version( $release );
+		$package = self::release_package( $release );
+		if ( ! $version || ! $package ) {
+			return $result;
+		}
+
+		$body = isset( $release['body'] ) ? trim( (string) $release['body'] ) : '';
+		return (object) array(
+			'name'          => 'Пивзавод77 — SEO Monitor',
+			'slug'          => self::PLUGIN_SLUG,
+			'version'       => $version,
+			'author'        => '<a href="https://github.com/WebStyleProduction24">WebStyleProduction24</a>',
+			'homepage'      => self::GITHUB_URL,
+			'requires'      => '6.2',
+			'tested'        => '7.1',
+			'requires_php'  => '8.0',
+			'download_link' => $package,
+			'last_updated'  => (string) ( $release['published_at'] ?? '' ),
+			'sections'      => array(
+				'description' => 'Технический SEO-мониторинг сайта pivzavod77.ru с отправкой отчётов через Telegram.',
+				'changelog'   => $body ? nl2br( esc_html( $body ) ) : 'Описание изменений опубликовано в GitHub Releases.',
+			),
+		);
+	}
+
+	/**
+	 * GitHub zipball содержит динамическое имя корневой директории. Перед
+	 * установкой переименовываем её в постоянный slug плагина.
+	 */
+	public static function normalize_update_source( $source, $remote_source, $upgrader, array $hook_extra ) {
+		$plugin_file = plugin_basename( __FILE__ );
+		if ( empty( $hook_extra['plugin'] ) || $plugin_file !== $hook_extra['plugin'] ) {
+			return $source;
+		}
+		if ( self::PLUGIN_SLUG === basename( untrailingslashit( $source ) ) ) {
+			return $source;
+		}
+
+		global $wp_filesystem;
+		if ( ! $wp_filesystem ) {
+			return new WP_Error( 'p77_update_filesystem', 'Не удалось инициализировать файловую систему WordPress.' );
+		}
+
+		$normalized_source = trailingslashit( $remote_source ) . self::PLUGIN_SLUG;
+		if ( $wp_filesystem->exists( $normalized_source ) ) {
+			$wp_filesystem->delete( $normalized_source, true );
+		}
+		if ( ! $wp_filesystem->move( $source, $normalized_source, true ) ) {
+			return new WP_Error( 'p77_update_move', 'Не удалось подготовить каталог обновления плагина.' );
+		}
+
+		return trailingslashit( $normalized_source );
+	}
+
+	public static function clear_update_cache( $upgrader, array $options ): void {
+		if ( 'plugin' !== ( $options['type'] ?? '' ) || 'update' !== ( $options['action'] ?? '' ) ) {
+			return;
+		}
+		$plugins = isset( $options['plugins'] ) && is_array( $options['plugins'] ) ? $options['plugins'] : array();
+		if ( in_array( plugin_basename( __FILE__ ), $plugins, true ) ) {
+			delete_transient( self::UPDATE_CACHE_KEY );
+		}
+	}
+
+	private static function latest_github_release() {
+		$cached = get_transient( self::UPDATE_CACHE_KEY );
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
+
+		$response = wp_remote_get(
+			self::GITHUB_API_URL,
+			array(
+				'timeout' => 12,
+				'headers' => array(
+					'Accept'               => 'application/vnd.github+json',
+					'X-GitHub-Api-Version' => '2022-11-28',
+					'User-Agent'           => 'Pivzavod77-SEO-Monitor/' . self::VERSION,
+				),
+			)
+		);
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		if ( 200 !== $code ) {
+			return new WP_Error( 'p77_github_http', 'GitHub Releases вернул HTTP ' . $code . '.' );
+		}
+		$release = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( ! is_array( $release ) || empty( $release['tag_name'] ) ) {
+			return new WP_Error( 'p77_github_response', 'GitHub вернул некорректные данные релиза.' );
+		}
+
+		set_transient( self::UPDATE_CACHE_KEY, $release, 6 * HOUR_IN_SECONDS );
+		return $release;
+	}
+
+	private static function release_version( array $release ): string {
+		$version = ltrim( trim( (string) ( $release['tag_name'] ?? '' ) ), "vV \t\n\r\0\x0B" );
+		return preg_match( '/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/', $version ) ? $version : '';
+	}
+
+	private static function release_package( array $release ): string {
+		$asset_name = self::PLUGIN_SLUG . '.zip';
+		foreach ( (array) ( $release['assets'] ?? array() ) as $asset ) {
+			if ( $asset_name === ( $asset['name'] ?? '' ) && ! empty( $asset['browser_download_url'] ) ) {
+				return esc_url_raw( (string) $asset['browser_download_url'] );
+			}
+		}
+		return ! empty( $release['zipball_url'] ) ? esc_url_raw( (string) $release['zipball_url'] ) : '';
 	}
 
 	private static function encrypt_token( string $token ): string {
@@ -748,6 +933,12 @@ final class P77_SEO_Monitor {
 		if ( '' === $path ) {
 			$path = '/';
 		}
+		// Регистр шестнадцатеричных символов в percent-encoding не меняет URL.
+		$path = preg_replace_callback(
+			'/%[0-9a-f]{2}/i',
+			static fn( array $match ): string => strtoupper( $match[0] ),
+			$path
+		);
 		return strtolower( $parts['scheme'] ?? 'https' ) . '://' . strtolower( $parts['host'] ) . $path . ( isset( $parts['query'] ) ? '?' . $parts['query'] : '' );
 	}
 
@@ -794,4 +985,3 @@ final class P77_SEO_Monitor {
 register_activation_hook( __FILE__, array( 'P77_SEO_Monitor', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'P77_SEO_Monitor', 'deactivate' ) );
 P77_SEO_Monitor::bootstrap();
-
