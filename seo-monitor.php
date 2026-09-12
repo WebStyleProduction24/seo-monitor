@@ -4,7 +4,7 @@
  * Description: Регулярно проверяет технические SEO-настройки и отправляет отчёты в Telegram.
  * Version: 1.1.0
  * Author: ООО "АЙ ТИ ГАММА"
- * Uthor URL: https://wsp24.ru/
+ * Author URI: https://wsp24.ru/
  * Requires at least: 6.2
  * Requires PHP: 8.0
  * Update URI: https://github.com/WebStyleProduction24/seo-monitor
@@ -36,11 +36,14 @@ final class SEO_Monitor {
 	private const YANDEX_REGION_CHECK_HOOK = 'seo_monitor_yandex_region_check';
 	private const YANDEX_REGION_ON_DEMAND_HOOK = 'seo_monitor_yandex_region_on_demand';
 	private const REST_NAMESPACE      = 'seo/v1';
-	private const SITE_URL            = 'https://pivzavod77.ru';
 	private const TELEGRAM_API        = 'https://api.telegram.org/bot';
 	private const YANDEX_API          = 'https://api.webmaster.yandex.net';
 	private const YANDEX_OAUTH_AUTHORIZE = 'https://oauth.yandex.ru/authorize';
 	private const YANDEX_OAUTH_TOKEN  = 'https://oauth.yandex.ru/token';
+
+	private static function site_url(): string {
+		return untrailingslashit( home_url( '/' ) );
+	}
 
 	public static function bootstrap(): void {
 		add_filter( 'cron_schedules', array( __CLASS__, 'cron_schedules' ) );
@@ -95,6 +98,7 @@ final class SEO_Monitor {
 		wp_clear_scheduled_hook( self::HOURLY_HOOK );
 		wp_clear_scheduled_hook( self::WEEKLY_HOOK );
 		wp_clear_scheduled_hook( self::YANDEX_DAILY_HOOK );
+		wp_clear_scheduled_hook( self::YANDEX_ON_DEMAND_HOOK );
 		wp_clear_scheduled_hook( self::YANDEX_REGION_CHECK_HOOK );
 		wp_clear_scheduled_hook( self::YANDEX_REGION_ON_DEMAND_HOOK );
 	}
@@ -102,7 +106,7 @@ final class SEO_Monitor {
 	public static function cron_schedules( array $schedules ): array {
 		$schedules['weekly'] = array(
 			'interval' => WEEK_IN_SECONDS,
-			'display'  => 'Раз в неделю (Пивзавод77)',
+			'display'  => 'Раз в неделю (SEO Monitor)',
 		);
 		return $schedules;
 	}
@@ -190,7 +194,7 @@ final class SEO_Monitor {
 	private static function defaults(): array {
 		return array(
 			'encrypted_token' => '',
-			'bot_username'    => 'pivzavod77_seo_bot',
+			'bot_username'    => '',
 			'webhook_path'    => wp_generate_password( 40, false, false ),
 			'webhook_secret'  => wp_generate_password( 48, false, false ),
 			'invite_code'     => strtoupper( wp_generate_password( 12, false, false ) ),
@@ -207,8 +211,8 @@ final class SEO_Monitor {
 			'yandex_host_id'                 => '',
 			'yandex_host_url'                => '',
 			'yandex_daily_enabled'           => 1,
-			'yandex_region_check_enabled'    => 1,
-			'yandex_region_check_date'       => '2026-09-09',
+			'yandex_region_check_enabled'    => 0,
+			'yandex_region_check_date'       => '',
 			'yandex_region_check_time'       => '10:00',
 			'yandex_expected_region'         => 'Москва и Московская область',
 		);
@@ -289,7 +293,7 @@ final class SEO_Monitor {
 
 		$body = isset( $release['body'] ) ? trim( (string) $release['body'] ) : '';
 		return (object) array(
-			'name'          => 'Пивзавод77 — SEO Monitor',
+			'name'          => 'SEO Monitor',
 			'slug'          => self::PLUGIN_SLUG,
 			'version'       => $version,
 			'author'        => '<a href="https://github.com/WebStyleProduction24">WebStyleProduction24</a>',
@@ -681,7 +685,8 @@ final class SEO_Monitor {
 			return $hosts;
 		}
 
-		$target = self::normalize_url( self::SITE_URL . '/' );
+		$site_url = self::site_url();
+		$target   = self::normalize_url( $site_url . '/' );
 		foreach ( (array) ( $hosts['hosts'] ?? array() ) as $host ) {
 			$host_url = (string) ( $host['ascii_host_url'] ?? $host['unicode_host_url'] ?? '' );
 			if ( self::normalize_url( $host_url ) === $target && ! empty( $host['verified'] ) ) {
@@ -695,12 +700,12 @@ final class SEO_Monitor {
 				return array( 'user_id' => $user_id, 'host_id' => (string) $mirror['host_id'], 'host_url' => $url );
 			}
 		}
-		return new WP_Error( 'yandex_host', 'В аккаунте нет подтверждённого сайта ' . self::SITE_URL . '.' );
+		return new WP_Error( 'yandex_host', 'В аккаунте нет подтверждённого сайта ' . $site_url . '.' );
 	}
 
 	public static function admin_menu(): void {
 		add_options_page(
-			'Пивзавод77 SEO Monitor',
+			'SEO Monitor',
 			'SEO Monitor',
 			'manage_options',
 			'seo-monitor',
@@ -718,12 +723,14 @@ final class SEO_Monitor {
 		$last_yandex_report = get_option( self::LAST_YANDEX_REPORT_OPTION, array() );
 		$days        = array( 1 => 'Понедельник', 2 => 'Вторник', 3 => 'Среда', 4 => 'Четверг', 5 => 'Пятница', 6 => 'Суббота', 7 => 'Воскресенье' );
 		$notice      = isset( $_GET['notice'] ) ? sanitize_text_field( wp_unslash( $_GET['notice'] ) ) : '';
-		$invite_link = 'https://t.me/' . ltrim( (string) $settings['bot_username'], '@' ) . '?start=' . rawurlencode( (string) $settings['invite_code'] );
+		$invite_link = $settings['bot_username']
+			? 'https://t.me/' . ltrim( (string) $settings['bot_username'], '@' ) . '?start=' . rawurlencode( (string) $settings['invite_code'] )
+			: '';
 		$yandex_connected = self::yandex_is_connected( $settings );
 		$region_check_timestamp = wp_next_scheduled( self::YANDEX_REGION_CHECK_HOOK );
 		?>
 		<div class="wrap">
-			<h1>Пивзавод77 — SEO Monitor</h1>
+			<h1>SEO Monitor</h1>
 			<?php if ( $notice ) : ?>
 				<div class="notice notice-info is-dismissible"><p><?php echo esc_html( $notice ); ?></p></div>
 			<?php endif; ?>
@@ -835,9 +842,9 @@ final class SEO_Monitor {
 					<a class="button button-primary" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=yandex_oauth_start' ), 'yandex_oauth_start' ) ); ?>"><?php echo $yandex_connected ? 'Подключить Яндекс повторно' : 'Подключить Яндекс'; ?></a>
 				<?php endif; ?>
 				<?php if ( $yandex_connected ) : ?>
-					<a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&action=run_yandex' ), 'seo_monitor_action' ) ); ?>">Проверить Яндекс сейчас</a>
-					<a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&action=run_region' ), 'seo_monitor_action' ) ); ?>">Проверить региональность</a>
-					<a class="button-link-delete" style="margin-left:12px" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&action=disconnect_yandex' ), 'seo_monitor_action' ) ); ?>" onclick="return confirm('Отключить Яндекс Вебмастер?');">Отключить</a>
+					<a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&seo_action=run_yandex' ), 'seo_monitor_action' ) ); ?>">Проверить Яндекс сейчас</a>
+					<a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&seo_action=run_region' ), 'seo_monitor_action' ) ); ?>">Проверить региональность</a>
+					<a class="button-link-delete" style="margin-left:12px" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&seo_action=disconnect_yandex' ), 'seo_monitor_action' ) ); ?>" onclick="return confirm('Отключить Яндекс Вебмастер?');">Отключить</a>
 				<?php endif; ?>
 			</p>
 			<?php if ( is_array( $last_yandex_report ) && ! empty( $last_yandex_report['created_at'] ) ) : ?>
@@ -847,11 +854,15 @@ final class SEO_Monitor {
 
 			<hr>
 			<h2>Добавление получателей</h2>
-			<p>Отправьте администратору или заказчику эту персональную ссылку. После нажатия «Запустить» пользователь будет добавлен в рассылку:</p>
-			<p><input type="text" class="large-text code" readonly value="<?php echo esc_attr( $invite_link ); ?>" onclick="this.select();"></p>
+			<?php if ( $invite_link ) : ?>
+				<p>Отправьте администратору или заказчику эту персональную ссылку. После нажатия «Запустить» пользователь будет добавлен в рассылку:</p>
+				<p><input type="text" class="large-text code" readonly value="<?php echo esc_attr( $invite_link ); ?>" onclick="this.select();"></p>
+			<?php else : ?>
+				<p>Сначала подключите Telegram-бота, чтобы получить ссылку-приглашение.</p>
+			<?php endif; ?>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline-block">
 				<input type="hidden" name="action" value="seo_monitor_action">
-				<input type="hidden" name="action" value="rotate_invite">
+				<input type="hidden" name="seo_action" value="rotate_invite">
 				<?php wp_nonce_field( 'seo_monitor_action' ); ?>
 				<?php submit_button( 'Сменить ссылку-приглашение', 'secondary', 'submit', false ); ?>
 			</form>
@@ -870,7 +881,7 @@ final class SEO_Monitor {
 							<td>
 								<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 									<input type="hidden" name="action" value="seo_monitor_action">
-									<input type="hidden" name="action" value="remove_subscriber">
+									<input type="hidden" name="seo_action" value="remove_subscriber">
 									<input type="hidden" name="chat_id" value="<?php echo esc_attr( $chat_id ); ?>">
 									<?php wp_nonce_field( 'seo_monitor_action' ); ?>
 									<button type="submit" class="button-link-delete">Удалить</button>
@@ -885,8 +896,8 @@ final class SEO_Monitor {
 			<?php endif; ?>
 
 			<p style="margin-top:20px">
-				<a class="button button-primary" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&action=run_full' ), 'seo_monitor_action' ) ); ?>">Проверить сайт сейчас</a>
-				<a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&action=test_message' ), 'seo_monitor_action' ) ); ?>">Отправить тестовое сообщение</a>
+				<a class="button button-primary" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&seo_action=run_full' ), 'seo_monitor_action' ) ); ?>">Проверить сайт сейчас</a>
+				<a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=seo_monitor_action&seo_action=test_message' ), 'seo_monitor_action' ) ); ?>">Отправить тестовое сообщение</a>
 			</p>
 
 			<?php if ( is_array( $last_report ) && ! empty( $last_report['created_at'] ) ) : ?>
@@ -926,7 +937,7 @@ final class SEO_Monitor {
 				self::redirect_admin( 'Telegram отклонил токен. Проверьте его и повторите попытку.' );
 			}
 			$settings['encrypted_token'] = $encrypted;
-			$settings['bot_username']    = sanitize_user( $me['result']['username'] ?? 'pivzavod77_seo_bot', true );
+			$settings['bot_username']    = sanitize_user( $me['result']['username'] ?? '', true );
 			$notice = 'Токен проверен, Telegram подключён.';
 		}
 
@@ -1055,7 +1066,7 @@ final class SEO_Monitor {
 			wp_die( 'Недостаточно прав.' );
 		}
 		check_admin_referer( 'seo_monitor_action' );
-		$action   = isset( $_REQUEST['action'] ) ? sanitize_key( $_REQUEST['action'] ) : '';
+		$action   = isset( $_REQUEST['seo_action'] ) ? sanitize_key( $_REQUEST['seo_action'] ) : '';
 		$settings = self::get_settings();
 		$notice   = 'Готово.';
 
@@ -1782,8 +1793,9 @@ final class SEO_Monitor {
 	}
 
 	public static function run_quick_check(): array {
-		$report = self::new_report( 'quick' );
-		$home   = self::fetch( self::SITE_URL . '/', 5 );
+		$report   = self::new_report( 'quick' );
+		$site_url = self::site_url();
+		$home     = self::fetch( $site_url . '/', 5 );
 		if ( 200 !== $home['code'] ) {
 			self::fail( $report, 'critical', 'Главная страница недоступна', 'HTTP ' . $home['code'] );
 		} else {
@@ -1794,27 +1806,27 @@ final class SEO_Monitor {
 			} else {
 				self::pass( $report );
 			}
-			if ( self::normalize_url( $meta['canonical'] ) !== self::SITE_URL . '/' ) {
+			if ( self::normalize_url( $meta['canonical'] ) !== self::normalize_url( $site_url . '/' ) ) {
 				self::fail( $report, 'critical', 'Canonical главной некорректен', $meta['canonical'] ?: 'отсутствует' );
 			} else {
 				self::pass( $report );
 			}
 		}
 
-		$robots = self::fetch( self::SITE_URL . '/robots.txt', 2 );
-		if ( 200 !== $robots['code'] || false === stripos( $robots['body'], 'Sitemap: ' . self::SITE_URL . '/wp-sitemap.xml' ) ) {
+		$robots = self::fetch( $site_url . '/robots.txt', 2 );
+		if ( 200 !== $robots['code'] || false === stripos( $robots['body'], 'Sitemap: ' . $site_url . '/wp-sitemap.xml' ) ) {
 			self::fail( $report, 'critical', 'robots.txt или строка Sitemap недоступны', 'HTTP ' . $robots['code'] );
 		} else {
 			self::pass( $report );
 		}
 
-		$sitemap = self::fetch( self::SITE_URL . '/wp-sitemap.xml', 2 );
+		$sitemap = self::fetch( $site_url . '/wp-sitemap.xml', 2 );
 		if ( 200 !== $sitemap['code'] || ! preg_match( '/<(?:sitemapindex|urlset)\b/i', $sitemap['body'] ) ) {
 			self::fail( $report, 'critical', 'Карта сайта недоступна', 'HTTP ' . $sitemap['code'] );
 		} else {
 			self::pass( $report );
 			foreach ( array( '/checkout/', '/lk/', '/author/admin/', '/author/administrator/' ) as $forbidden ) {
-				if ( false !== stripos( $sitemap['body'], self::SITE_URL . $forbidden ) ) {
+				if ( false !== stripos( $sitemap['body'], $site_url . $forbidden ) ) {
 					self::fail( $report, 'warning', 'Технический URL найден в sitemap', $forbidden );
 				} else {
 					self::pass( $report );
@@ -1822,10 +1834,19 @@ final class SEO_Monitor {
 			}
 		}
 
-		self::check_redirect( $report, 'http://pivzavod77.ru/', self::SITE_URL . '/' );
-		self::check_redirect( $report, 'https://www.pivzavod77.ru/', self::SITE_URL . '/' );
-		self::check_page_canonical( $report, self::SITE_URL . '/shop/' );
-		self::check_noindex_page( $report, self::SITE_URL . '/lk/' );
+		$site_parts = wp_parse_url( $site_url );
+		$scheme     = strtolower( (string) ( $site_parts['scheme'] ?? 'https' ) );
+		$host       = strtolower( (string) ( $site_parts['host'] ?? '' ) );
+		$path       = isset( $site_parts['path'] ) ? '/' . trim( (string) $site_parts['path'], '/' ) : '';
+		$path       = '/' === $path ? '' : $path;
+		if ( $host ) {
+			$alternate_scheme = 'https' === $scheme ? 'http' : 'https';
+			$alternate_host   = str_starts_with( $host, 'www.' ) ? substr( $host, 4 ) : 'www.' . $host;
+			self::check_redirect( $report, $alternate_scheme . '://' . $host . $path . '/', $site_url . '/' );
+			self::check_redirect( $report, $scheme . '://' . $alternate_host . $path . '/', $site_url . '/' );
+		}
+		self::check_page_canonical( $report, $site_url . '/shop/' );
+		self::check_noindex_page( $report, $site_url . '/lk/' );
 
 		$report['url_count'] = $report['checked'];
 		return $report;
@@ -1833,6 +1854,7 @@ final class SEO_Monitor {
 
 	public static function run_full_check(): array {
 		$report       = self::run_quick_check();
+		$site_url     = self::site_url();
 		$report['type'] = 'full';
 		$urls         = self::sitemap_urls();
 		$report['url_count'] = count( $urls );
@@ -1875,10 +1897,10 @@ final class SEO_Monitor {
 			}
 		}
 
-		foreach ( array( self::SITE_URL . '/author/admin/', self::SITE_URL . '/author/administrator/' ) as $author_url ) {
+		foreach ( array( $site_url . '/author/admin/', $site_url . '/author/administrator/' ) as $author_url ) {
 			self::check_noindex_page( $report, $author_url, true );
 		}
-		foreach ( array( self::SITE_URL . '/feed/', self::SITE_URL . '/comments/feed/' ) as $feed_url ) {
+		foreach ( array( $site_url . '/feed/', $site_url . '/comments/feed/' ) as $feed_url ) {
 			$feed = self::fetch( $feed_url, 2 );
 			if ( 200 === $feed['code'] && ! str_contains( strtolower( $feed['x_robots'] ), 'noindex' ) ) {
 				self::fail( $report, 'warning', 'RSS доступен без X-Robots-Tag: noindex', $feed_url );
@@ -1892,7 +1914,7 @@ final class SEO_Monitor {
 	}
 
 	private static function sitemap_urls(): array {
-		$index = self::fetch( self::SITE_URL . '/wp-sitemap.xml', 2 );
+		$index = self::fetch( self::site_url() . '/wp-sitemap.xml', 2 );
 		if ( 200 !== $index['code'] ) {
 			return array();
 		}
