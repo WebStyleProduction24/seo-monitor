@@ -2,7 +2,7 @@
 Contributors: it-gamma
 Requires at least: 6.2
 Requires PHP: 8.0
-Stable tag: 1.1.0
+Stable tag: 1.1.1
 
 WordPress-плагин для технического SEO-мониторинга и отправки отчётов в Telegram.
 
